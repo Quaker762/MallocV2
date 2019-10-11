@@ -189,6 +189,75 @@ static memblk_t* find_first_free(size_t size)
     return NULL;
 }
 
+/**
+ * Find best sized block for the requested size.
+ * 
+ * Iterates over the free list to find a block that is the "best fit" for the request. That is, 
+ * the smallest possible block that will result in the largest possible hole. 
+ * 
+ * NOTE: As this function requires a full pass to find the smallest possible block size,
+ * it will return NULL if the block is locked, meaning the iteration has effectively been
+ * wasted. In this case, the allocator will create a new block instead. 
+ */
+static memblk_t* _find_best_fit(size_t size)
+{
+    memblk_t*   block = free_list.head;
+    size_t      curr_size = SIZE_MAX;
+    while(block != NULL)
+    {
+        if(block->size == size)
+            break;
+            
+        if(block->size < curr_size && block->size >= size)
+        {
+            curr_size = block->size;
+        }
+
+        block = block->next;
+    }
+
+    // At this point, we've found the best fit block (as we've iterated over the entire free list).
+    // We can now attempt lock the block, and return it to the caller
+    if(block != NULL)
+    {
+        int ret = pthread_mutex_trylock(&block->lock);
+        if(ret == 0)
+            return block;
+    }
+
+    return NULL;
+}
+
+/**
+ * 
+ */
+static memblk_t* _find_worst_fit()
+{
+    memblk_t*   block = free_list.head;
+    size_t      curr_size = 0;
+
+    while(block != NULL)
+    {
+        if(block->size > curr_size)
+        {
+            curr_size = block->size;
+        }
+
+        block = block->next;
+    }
+
+    // At this point, we've found the best fit block (as we've iterated over the entire free list).
+    // We can now attempt lock the block, and return it to the caller
+    if(block != NULL)
+    {
+        int ret = pthread_mutex_trylock(&block->lock);
+        if(ret == 0)
+            return block;
+    }
+
+    return NULL;
+}
+
 static void* _alloc_first_fit(size_t size)
 {
     memblk_t* found;
@@ -210,8 +279,8 @@ static void* _alloc_first_fit(size_t size)
             rwlock_wrlock(&free_list.lock);
             // Let's add the split block to the free list
             list_append_block(&free_list, _alloc_create_split_block(size_diff, (((uint8_t*)found->data) + size_diff)));
-            rwlock_unlock(&free_list.lock);
             num_free++;
+            rwlock_unlock(&free_list.lock);
         }
 
         rwlock_wrlock(&free_list.lock);
@@ -222,8 +291,9 @@ static void* _alloc_first_fit(size_t size)
         rwlock_wrlock(&alloc_list.lock);
         list_append_block(&alloc_list, found);
         pthread_mutex_unlock(&found->lock);
-        rwlock_unlock(&alloc_list.lock);
         num_free--;
+        rwlock_unlock(&alloc_list.lock);
+
         return found->data;
     }
 
@@ -239,12 +309,100 @@ static void* _alloc_first_fit(size_t size)
 
 static void* _alloc_best_fit(size_t size)
 {
-    return NULL;
+    memblk_t* found;
+
+    _alloc_init();
+
+    // First, let's check the free list
+    rwlock_rdlock(&free_list.lock);
+    found = _find_best_fit(size);
+    rwlock_unlock(&free_list.lock);
+
+    if(found != NULL)
+    {
+        if(found->size > size)
+        {
+            int size_diff = found->size - size;
+            found->size = size;
+
+            rwlock_wrlock(&free_list.lock);
+            // Let's add the split block to the free list
+            list_append_block(&free_list, _alloc_create_split_block(size_diff, (((uint8_t*)found->data) + size)));
+            num_free++;
+            rwlock_unlock(&free_list.lock);
+        }
+
+        rwlock_wrlock(&free_list.lock);
+        list_delete_block(&free_list, found);
+        rwlock_unlock(&free_list.lock);
+
+        // Now let's add the block we found to the allocated list
+        rwlock_wrlock(&alloc_list.lock);
+        list_append_block(&alloc_list, found);
+        pthread_mutex_unlock(&found->lock);
+        num_free--;
+        rwlock_unlock(&alloc_list.lock);
+
+        return found->data;
+    }
+
+    // There doesn't seem to be a block for this size in the free list, so let's
+    // create it.
+    rwlock_wrlock(&alloc_list.lock);
+    memblk_t* block = _alloc_create_new_block(size);
+    list_append_block(&alloc_list, block);
+    rwlock_unlock(&alloc_list.lock);
+    
+    return block->data;
 }
 
 static void* _alloc_worst_fit(size_t size)
 {
-    return NULL;
+    memblk_t* found;
+
+    _alloc_init();
+
+    // First, let's check the free list
+    rwlock_rdlock(&free_list.lock);
+    found = _find_worst_fit(size);
+    rwlock_unlock(&free_list.lock);
+
+    if(found != NULL)
+    {
+        if(found->size > size)
+        {
+            int size_diff = found->size - size;
+            found->size = size;
+
+            rwlock_wrlock(&free_list.lock);
+            // Let's add the split block to the free list
+            list_append_block(&free_list, _alloc_create_split_block(size_diff, (((uint8_t*)found->data) + size)));
+            num_free++;
+            rwlock_unlock(&free_list.lock);
+        }
+
+        rwlock_wrlock(&free_list.lock);
+        list_delete_block(&free_list, found);
+        rwlock_unlock(&free_list.lock);
+
+        // Now let's add the block we found to the allocated list
+        rwlock_wrlock(&alloc_list.lock);
+        list_append_block(&alloc_list, found);
+        pthread_mutex_unlock(&found->lock);
+        num_free--;
+        rwlock_unlock(&alloc_list.lock);
+
+        return found->data;
+    }
+
+    // There doesn't seem to be a block for this size in the free list, so let's
+    // create it.
+    rwlock_wrlock(&alloc_list.lock);
+    memblk_t* block = _alloc_create_new_block(size);
+    list_append_block(&alloc_list, block);
+    rwlock_unlock(&alloc_list.lock);
+    
+    return block->data;
 }
 
 void* alloc(size_t size)

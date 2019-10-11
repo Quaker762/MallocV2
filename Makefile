@@ -1,7 +1,7 @@
 CC=gcc
 OBJDUMP=objdump
 NM=nm
-CFLAGS=-g -Wall -Wextra -Wpedantic -std=gnu99
+CFLAGS=-g -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -std=gnu99
 
 OBJS := $(patsubst %.c, %.o, $(wildcard source/*.c))
 

@@ -59,7 +59,7 @@ typedef enum
     INSANE
 } allocation_type;
 
-#define ALLOCS_PER_THREAD 512
+#define ALLOCS_PER_THREAD 1024
 
 void print_info()
 {
@@ -94,7 +94,7 @@ void *thread_func(void *unused)
     return 0;
 }
 
-#define NO_OF_THREADS 100
+#define NO_OF_THREADS 30
 
 int main(int argc, char **argv)
 {

@@ -35,8 +35,6 @@ void* alloc(size_t);
 void dealloc(void*);
 
 
-
-
 /**
  * The following are a few special functions to help with the report
  * writing, as well as general data gathering
