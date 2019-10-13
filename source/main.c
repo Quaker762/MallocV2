@@ -15,6 +15,11 @@
 
 #include "allocator.h"
 
+#define ALLOCS_PER_THREAD   2500
+#define STRUCT_ARRAY_SIZE   8000
+#define NUMBER_ITERATIONS   1
+#define NUMBER_OF_THREADS   12
+
 // sizeof == 8 bytes
 typedef struct
 {
@@ -59,7 +64,7 @@ typedef enum
     INSANE
 } allocation_type;
 
-#define ALLOCS_PER_THREAD 1024
+static allocation_type          alloc_type = SMALL;
 
 void print_info()
 {
@@ -69,39 +74,47 @@ void print_info()
     printf("number of free blocks \t= %ld\n", number_of_free_blocks());
 }
 
-void *thread_func(void *unused)
+/**
+ *  Note for Paul!
+ * 
+ * I was having a few issues with getrusage giving me really fucking stupid values
+ * that were greater than 1 billion.... Yeah...
+ * 
+ * I'm going to be using a profiler/the time bash function to measure the speed of 
+ * the execution time of this function/the whole program. 
+ */
+void* thread_func(void* data)
 {
-    void *alloc_ptrs[ALLOCS_PER_THREAD];
+    int             local_count = 0;
+    int             len = 0;
+    struct          rusage usage;
+    struct timeval start, end;
+    static char*    nameArr[ALLOCS_PER_THREAD];
+    int             size = 0;
+    size_t          us = 0;
 
-    printf("Thread %ld starting.\n", pthread_self());
-    for(int i = 0; i < ALLOCS_PER_THREAD; ++i)
+    for(;;)
     {
-        alloc_ptrs[i] = alloc((i+1)*5);
-        //printf("Thread %ld: alloc - %p\n", pthread_self(), alloc_ptrs[i]);
+        if(local_count++ >= ALLOCS_PER_THREAD)
+            break;
+
+        len = rand() % sizeof(insane_struct);
+
+        //getrusage(RUSAGE_SELF, &usage);
+        //start = usage.ru_utime;
+        nameArr[local_count] = (char*)alloc(len);
+        //getrusage(RUSAGE_SELF, &usage);
+        //end = usage.ru_utime;
+
+        //us += end.tv_usec - start.tv_usec;
+        len = 0;
     }
-    printf("Thread %ld deallocing.\n", pthread_self());
-    for(int i = 0; i < ALLOCS_PER_THREAD; ++i)
-    {
-        //printf("Thread %ld: dealloc - %p\n", pthread_self(), alloc_ptrs[i]);
-        dealloc(alloc_ptrs[i]);
-    }
-    printf("Thread %ld allocing.\n", pthread_self());
-    for(int i = 0; i < ALLOCS_PER_THREAD; ++i)
-    {
-        alloc_ptrs[i] = alloc((i+1)*3);
-        //printf("Thread %ld: alloc - %p\n", pthread_self(), alloc_ptrs[i]);
-    }
+    //printf("allocation block for thread %ld took %lu us\n", pthread_self(), us);
     return 0;
 }
 
-#define NO_OF_THREADS 30
-
 int main(int argc, char **argv)
 {
-    FILE*               names;
-    allocation_type     alloc_type = SMALL;
-    struct rusage       usage;
-
     if(argc <= 1)
     {
         printf("usage: alloc <usage_type>\nUsage types are: first, best, worst\n\n");
@@ -130,23 +143,137 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    pthread_t thr_ids[NO_OF_THREADS];
+    medium_struct*      mediumAllocs[STRUCT_ARRAY_SIZE];
+    big_struct*         bigAllocs[STRUCT_ARRAY_SIZE];
+    huge_struct*        hugeAllocs[STRUCT_ARRAY_SIZE];
+    insane_struct*      insaneAllocs[STRUCT_ARRAY_SIZE];
 
-    for(int i = 0; i < NO_OF_THREADS; ++i)
+    printf("Fragmenting base memory allocation list...\n");
+
+    for(int i = 0; i < NUMBER_ITERATIONS; i++)
     {
-        if(pthread_create(&thr_ids[i], NULL, thread_func, NULL) != 0)  
+        // Let's allocate some structs too.
+        // Because these are VERY randomised allocations, we need 'array pointers'
+        // so we can allocate each array linearly
+        int mp=0, bp=0, hp=0, ip=0;
+        for(int j = 0; j < STRUCT_ARRAY_SIZE; j++)
         {
-            perror("Can not create thread");
+            int r = rand() % 5;
+            alloc_type = (allocation_type)r;
+
+            switch(alloc_type)
+            {
+            case MEDIUM:
+                if(mp > STRUCT_ARRAY_SIZE)
+                    break;
+                //printf("allocating a medium struct\n");
+                mediumAllocs[mp] = (medium_struct*)alloc(sizeof(medium_struct));
+                //printf("that allocation took %ld microseconds!\n", usage.ru_utime.tv_usec - start);
+                mp++;
+                break;
+            case BIG:
+                if(bp > STRUCT_ARRAY_SIZE)
+                    break;
+                //printf("allocating a big struct\n");
+                bigAllocs[bp] = (big_struct*)alloc(sizeof(big_struct));
+                //printf("that allocation took %ld microseconds!\n", usage.ru_utime.tv_usec - start);
+                bp++;
+                break;
+            case HUGE:
+                if(hp > STRUCT_ARRAY_SIZE)
+                    break;
+                //printf("allocating a huge struct\n");
+                hugeAllocs[hp] = (huge_struct*)alloc(sizeof(huge_struct));
+                //printf("that allocation took %ld microseconds!\n", usage.ru_utime.tv_usec - start);
+                hp++;
+                break;
+            case INSANE:
+                if(ip > STRUCT_ARRAY_SIZE)
+                    break;
+                //printf("allocating an insane struct\n");
+                insaneAllocs[ip] = (insane_struct*)alloc(sizeof(insane_struct));
+                //printf("that allocation took %ld microseconds!\n", usage.ru_utime.tv_usec - start);
+                ip++;
+                break;
+            default:
+                break;
+            }
+        }
+
+        for(int j = 0; j < STRUCT_ARRAY_SIZE; j++)
+        {
+            int r = rand() % 5;
+            int slot = 0;
+            alloc_type = (allocation_type)r;
+
+            switch(alloc_type)
+            {
+            case MEDIUM:
+                slot = rand() % mp;
+                if(mediumAllocs[slot] != NULL)
+                {
+                    dealloc(mediumAllocs[slot]);
+                    mediumAllocs[slot] = NULL;
+                }
+                break;
+            case BIG:
+                slot = rand() % bp;
+                if(bigAllocs[slot] != NULL)
+                {
+                    dealloc(bigAllocs[slot]);
+                    bigAllocs[slot] = NULL;
+                }
+                break;
+            case HUGE:
+                slot = rand() % hp;
+                if(hugeAllocs[slot] != NULL)
+                {
+                    dealloc(hugeAllocs[slot]);
+                    hugeAllocs[slot] = NULL;
+                }
+                break;
+            case INSANE:
+                slot = rand() % ip;
+                if(insaneAllocs[slot] != NULL)
+                {
+                    dealloc(insaneAllocs[slot]);
+                    insaneAllocs[slot] = NULL;
+                }
+                break;
+            default:
+                break;
+            }
         }
     }
 
-    for(int i = 0; i < NO_OF_THREADS; ++i)
+    printf("Done fragmenting the list!\n");
+
+    srand(time(NULL));
+
+    // Let's spawn a bunch of threads
+    pthread_t th_ids[NUMBER_OF_THREADS];
+    for(int i = 0; i < NUMBER_OF_THREADS; ++i)
     {
-        if(pthread_join(thr_ids[i], NULL) != 0)
+        if(pthread_create(&th_ids[i], NULL, thread_func, NULL) != 0)  
         {
-            perror("Can not join thread");
+            fprintf(stderr, "Can not create thread");
+            abort();
         }
-        printf("Thread %lu joined with main.\n", thr_ids[i]);
     }
+
+    for(int i = 0; i < NUMBER_OF_THREADS; ++i)
+    {
+        if(pthread_join(th_ids[i], NULL) != 0)
+        {
+            fprintf(stderr, "Can not join thread");
+            abort();
+        }
+        printf("Thread %lu joined with main.\n", th_ids[i]);
+    }
+
+    //print_alloc_list();
+    //print_free_list();
+    print_info();
+
     return 0;
 }
